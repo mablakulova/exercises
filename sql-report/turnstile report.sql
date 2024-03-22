@@ -1,64 +1,63 @@
 WITH cte
 AS (
-	SELECT DISTINCT empmanage.employee_id Employee_ID,
-		emp.full_name EmployeeFullName,
-		pos.id PositionID,
-		COALESCE(postran.translate_text::CHARACTER VARYING, pos.short_name) PositionName,
-		TO_CHAR(empmanage.start_on, 'DD.MM.YYYY') StartOn,
-		TO_CHAR(emplog.event_on, 'DD.MM.YYYY') EventOn,
-		emplog.employee_turnstile_log_type_id ActionType,
-		TRIM(BOTH ' ' FROM TO_CHAR(emplog.event_on, 'Day')) AS WeekDay,
-		DATE_TRUNC('minute', emplog.event_at) event_at,
-		scheduleday.begin_at::interval BeginScheduleTime,
-		scheduleday.end_at::interval EndScheduleTime,
-		emplog.date_of_created,
-		row_number() OVER (ORDER BY emplog.event_at) AS rn
-	FROM hrm.sys_employee_turnstile_log emplog
-	LEFT JOIN hrm.sys_employee_manage empmanage
-		ON emplog.employee_id = empmanage.employee_id
-	LEFT JOIN PUBLIC.hl_employee emp
-		ON empmanage.employee_id = emp.id
-	LEFT JOIN PUBLIC.hl_position pos
-		ON empmanage.position_id = pos.id
+	SELECT DISTINCT employeemanage.employee_id employee_id,
+		employee.full_name employee_fullname,
+		position.id position_id,
+		COALESCE(positiontranslate.translate_text::CHARACTER VARYING, position.short_name) positon_name,
+		TO_CHAR(employeemanage.start_on, 'DD.MM.YYYY') starton,
+		TO_CHAR(employeelog.event_on, 'DD.MM.YYYY') eventon,
+		employeelog.employee_turnstile_log_type_id action_type,
+		TRIM(BOTH ' ' FROM TO_CHAR(employeelog.event_on, 'Day')) AS week_day,
+		DATE_TRUNC('minute', employeelog.event_at) event_at,
+		scheduledayhour.begin_at::interval begin_schedule_time,
+		scheduledayhour.end_at::interval end_schedule_time,
+		row_number() OVER (ORDER BY employeelog.event_at) AS rn
+	FROM hrm.sys_employee_turnstile_log employeelog
+	LEFT JOIN hrm.sys_employee_manage employeemanage
+		ON employeelog.employee_id = employeemanage.employee_id
+	LEFT JOIN public.hl_employee employee
+		ON employeemanage.employee_id = employee.id
+	LEFT JOIN public.hl_position position
+		ON employeemanage.position_id = position.id
 	LEFT JOIN hrm.info_work_schedule schedule
-		ON schedule.id = empmanage.work_schedule_id
-	LEFT JOIN hrm.info_work_schedule_day_hour scheduleday
-		ON scheduleday.owner_id = schedule.id
-	LEFT JOIN PUBLIC.hl_position_translate postran
-		ON postran.owner_id = pos.id
-	WHERE emp.id = 20 AND emplog.event_on = '2024-02-16' AND scheduleday.day_number = EXTRACT(ISODOW FROM emplog.event_on::TIMESTAMP)
+		ON schedule.id = employeemanage.work_schedule_id
+	LEFT JOIN hrm.info_work_schedule_day_hour scheduledayhour
+		ON scheduledayhour.owner_id = schedule.id
+	LEFT JOIN public.hl_position_translate positiontranslate
+		ON positiontranslate.owner_id = position.id
+	WHERE employee.id = 20 AND employeelog.event_on = '2024-02-16' AND scheduledayhour.day_number = EXTRACT(ISODOW FROM employeelog.event_on::TIMESTAMP)
 	),
 cte2
 AS (
-	SELECT a.Employee_ID,
-		a.EmployeeFullName,
-		a.PositionID,
-		a.PositionName,
-		a.StartOn,
-		a.EventOn,
-		a.WeekDay,
+	SELECT a.employee_id,
+		a.employee_fullname,
+		a.position_id,
+		a.positon_name,
+		a.starton,
+		a.eventon,
+		a.week_day,
 		CASE 
 			WHEN CASE 
-					WHEN a.BeginScheduleTime >= TO_CHAR(CASE 
+					WHEN a.begin_schedule_time >= TO_CHAR(CASE 
 								WHEN entertime.event_at IS NULL
 									THEN LAG(exittime.event_at) OVER (ORDER BY exittime.rn)
 								ELSE entertime.event_at
 								END, 'HH24:MI')::interval
-						THEN a.BeginScheduleTime
+						THEN a.begin_schedule_time
 					ELSE TO_CHAR(CASE 
 								WHEN entertime.event_at IS NULL
 									THEN LAG(exittime.event_at) OVER (ORDER BY exittime.rn)
 								ELSE entertime.event_at
 								END, 'HH24:MI')::interval
-					END >= a.EndScheduleTime
-				THEN a.EndScheduleTime
+					END >= a.end_schedule_time
+				THEN a.end_schedule_time
 			ELSE CASE 
-					WHEN a.BeginScheduleTime >= TO_CHAR(CASE 
+					WHEN a.begin_schedule_time >= TO_CHAR(CASE 
 								WHEN entertime.event_at IS NULL
 									THEN LAG(exittime.event_at) OVER (ORDER BY exittime.rn)
 								ELSE entertime.event_at
 								END, 'HH24:MI')::interval
-						THEN a.BeginScheduleTime
+						THEN a.begin_schedule_time
 					ELSE TO_CHAR(CASE 
 								WHEN entertime.event_at IS NULL
 									THEN LAG(exittime.event_at) OVER (ORDER BY exittime.rn)
@@ -67,12 +66,12 @@ AS (
 					END
 			END AS enterschedule,
 		CASE 
-			WHEN a.EndScheduleTime <= TO_CHAR(CASE 
+			WHEN a.end_schedule_time <= TO_CHAR(CASE 
 						WHEN exittime.event_at IS NULL
 							THEN LEAD(entertime.event_at) OVER (ORDER BY entertime.rn)
 						ELSE exittime.event_at
 						END, 'HH24:MI')::interval
-				THEN a.EndScheduleTime
+				THEN a.end_schedule_time
 			ELSE TO_CHAR(CASE 
 						WHEN exittime.event_at IS NULL
 							THEN LEAD(entertime.event_at) OVER (ORDER BY entertime.rn)
@@ -95,7 +94,7 @@ AS (
 			event_at,
 			rn
 		FROM cte
-		WHERE actiontype = 1
+		WHERE action_type = 1
 		) AS entertime
 		ON a.employee_id = entertime.employee_id AND a.rn = entertime.rn
 	LEFT JOIN (
@@ -103,7 +102,7 @@ AS (
 			event_at,
 			rn
 		FROM cte
-		WHERE actiontype = 2
+		WHERE action_type = 2
 		) AS exittime
 		ON a.employee_id = exittime.employee_id AND a.rn = exittime.rn - 1
 	ORDER BY CASE 
