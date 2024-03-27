@@ -123,3 +123,8 @@ AS (
 	)
 SELECT *
 FROM cte3
+
+select * 
+, event_At - INTERVAL '5 hours' as wordday
+FROM hrm.sys_employee_turnstile_log 
+where event_on <> (event_At - INTERVAL '5 hours')::date
