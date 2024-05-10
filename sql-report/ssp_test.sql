@@ -10,6 +10,7 @@ WITH cte
 		employeelog.employee_turnstile_log_type_id AS action_type,
 		TRIM(BOTH ' ' FROM TO_CHAR((employeelog.event_At - INTERVAL '7 hours')::DATE, 'Day')) AS week_day,
 		DATE_TRUNC('minute', employeelog.event_at) AS event_at,
+	    TO_CHAR(DATE_TRUNC('minute', employeelog.event_at), 'HH24:MI')::INTERVAL AS event_at_interval,
 	    scheduledayhour.begin_at::INTERVAL AS schedule_day_begin_hour,
 	    scheduledayhour.end_at::INTERVAL AS schedule_day_end_hour,
 		COALESCE(in_start_work_time, scheduledayhour.begin_at::interval, '09:00'::interval) AS begin_schedule_time,
@@ -42,7 +43,7 @@ WITH cte
         (employeelog.event_at - INTERVAL '7 hours')::DATE >= in_start_date::DATE AND 
         (employeelog.event_at - INTERVAL '7 hours')::DATE <= in_end_date::DATE	
 	),
-    cte2
+   cte2
     AS (
 	  SELECT 
         a.employee_id,
@@ -93,15 +94,15 @@ WITH cte
 						   ELSE exittime.event_at
 						   END, 'HH24:MI')::interval <= '07:00'::interval
 				THEN a.end_schedule_time
-		    WHEN (a.row_count = 1 AND a.eventon < CURRENT_DATE) THEN
+		    WHEN (a.row_count = 1 AND a.eventon < CURRENT_DATE AND a.action_type = 1) THEN
 		       CASE
-		           WHEN TO_CHAR(a.event_at, 'HH24:MI')::INTERVAL < a.schedule_day_end_hour 
+		           WHEN event_at_interval < a.schedule_day_end_hour 
 		              THEN a.schedule_day_end_hour
-                   WHEN TO_CHAR(a.event_at, 'HH24:MI')::INTERVAL > a.schedule_day_end_hour AND TO_CHAR(a.event_at, 'HH24:MI')::INTERVAL < '18:00'::INTERVAL 
+                   WHEN event_at_interval > a.schedule_day_end_hour AND event_at_interval < '18:00'::INTERVAL 
 		              THEN '18:00'::INTERVAL
-               ELSE TO_CHAR(a.event_at, 'HH24:MI')::INTERVAL
+               ELSE event_at_interval
                END
-		    WHEN (a.row_count = 1 AND a.eventon = CURRENT_DATE) 
+		    WHEN (a.row_count = 1 AND a.eventon = CURRENT_DATE AND a.action_type = 1) 
 		       THEN TO_CHAR(NOW(), 'HH24:MI')::INTERVAL
 			ELSE TO_CHAR(CASE 
 						WHEN exittime.event_at IS NULL
@@ -115,10 +116,33 @@ WITH cte
 			ELSE entertime.event_at
 			END AS entertime,
 		CASE 
-			WHEN exittime.event_at IS NULL
+		    WHEN (a.row_count = 1 AND a.eventon < CURRENT_DATE AND a.action_type = 1) THEN
+		       CASE
+		           WHEN event_at_interval < a.schedule_day_end_hour 
+		              THEN (a.event_at::DATE || ' ' || a.schedule_day_end_hour)::TIMESTAMP
+                   WHEN event_at_interval > a.schedule_day_end_hour AND event_at_interval < '18:00'::INTERVAL 
+		              THEN (a.event_at::DATE || ' ' || '18:00'::INTERVAL)::TIMESTAMP
+               ELSE a.event_at
+               END
+		    WHEN (a.row_count = 1 AND a.eventon = CURRENT_DATE AND a.action_type = 1) 
+		       THEN NOW()
+		    WHEN exittime.event_at IS NULL
                THEN LEAD(entertime.event_at) OVER (PARTITION BY a.employee_id, a.eventon ORDER BY entertime.rn)
 			ELSE exittime.event_at
-			END AS exittime
+			END AS exittime,
+		CASE 
+		    WHEN (a.row_count = 1 AND a.eventon < CURRENT_DATE AND a.action_type = 1) THEN
+		       CASE
+		           WHEN event_at_interval < a.schedule_day_end_hour 
+		              THEN (a.event_at::DATE || ' ' || a.schedule_day_end_hour)::TIMESTAMP
+                   WHEN event_at_interval > a.schedule_day_end_hour AND event_at_interval < '18:00'::INTERVAL 
+		              THEN (a.event_at::DATE || ' ' || '18:00'::INTERVAL)::TIMESTAMP
+               ELSE a.event_at
+               END
+		    WHEN exittime.event_at IS NULL
+               THEN LEAD(entertime.event_at) OVER (PARTITION BY a.employee_id, a.eventon ORDER BY entertime.rn)
+			ELSE exittime.event_at
+			END AS d_exittime
 		FROM cte a 
 		LEFT JOIN (
 			SELECT cte.employee_id,
@@ -151,10 +175,11 @@ WITH cte
 		    cte2.eventon,
             MIN(entertime) AS first_entertime,
             MAX(exittime) AS last_exittime,
+		    MAX(d_exittime) AS last_d_exittime,
             MIN(enterschedule) AS first_enterschedule,
             MAX(exitschedule) AS last_exitschedule,
             COUNT(entertime) AS enter_count,
-	        COUNT(exittime) AS exit_count
+	        COUNT(d_exittime) AS exit_count
         FROM 
             cte2
         WHERE 
@@ -169,6 +194,7 @@ WITH cte
             cte2.*,
 	        cte3.first_entertime,
 	        cte3.last_exittime,
+		    cte3.last_d_exittime,
 	        cte3.first_enterschedule, 
 	        cte3.last_exitschedule,
             cte3.enter_count,
@@ -196,7 +222,11 @@ WITH cte
         TO_CHAR(cte4.eventon, 'DD.MM.YYYY') AS event_on,
         cte4.week_day,
         TO_CHAR(cte4.first_entertime, 'HH24:MI:SS') AS enter_at,
-        TO_CHAR(cte4.last_exittime, 'HH24:MI:SS') AS exit_at,
+        CASE
+           WHEN (cte4.last_exittime = cte4.last_d_exittime AND cte4.last_d_exittime IS NOT NULL)
+              THEN TO_CHAR(cte4.last_exittime, 'HH24:MI:SS') 
+		   ELSE NULL
+        END exit_at,
         TO_CHAR(cte4.first_enterschedule, 'HH24:MI:SS') AS enter_at_schedule,
         TO_CHAR(cte4.last_exitschedule, 'HH24:MI:SS') AS exit_at_schedule,
         CAST(SUM(cte4.periodMinute) AS INTEGER) AS period_minute,
@@ -215,6 +245,7 @@ WITH cte
         cte4.eventon,
 	    cte4.first_entertime,
 	    cte4.last_exittime,
+		cte4.last_d_exittime,
 	    cte4.first_enterschedule,
 	    cte4.last_exitschedule,
         cte4.enter_count,
