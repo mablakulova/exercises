@@ -49,8 +49,7 @@ BEGIN
 		DATE_TRUNC('minute', employeelog.event_at) AS event_at,
 		COALESCE(in_start_work_time, scheduledayhour.begin_at::interval, '09:00'::interval) AS begin_schedule_time,
 		COALESCE(in_end_work_time, scheduledayhour.end_at::interval, '18:00'::interval) AS end_schedule_time,
-        ROW_NUMBER() OVER (PARTITION BY employeelog.employee_id, (employeelog.event_At - INTERVAL '7 hours')::DATE ORDER BY employeelog.event_at) AS rn
-		--row_number() OVER (ORDER BY employeelog.event_at) AS rn 
+	    ROW_NUMBER() OVER (PARTITION BY employeelog.employee_id, (employeelog.event_At - INTERVAL '7 hours')::DATE ORDER BY employeelog.event_at) AS rn
     FROM 
         hrm.sys_employee_turnstile_log employeelog 
     LEFT JOIN 
@@ -70,11 +69,10 @@ BEGIN
         public.info_position_translate positiontranslate ON positiontranslate.owner_id = position.id 
     WHERE 
         (in_employee_fullname IS NULL OR person.full_name ILIKE ('%' || in_employee_fullname || '%')) AND 
-        --(employeelog.event_At - INTERVAL '7 hours')::DATE = '2024-07-09' AND 
         employeemanage.start_on < in_end_date::DATE AND
 	    (employeemanage.end_on IS NULL OR employeemanage.end_on > in_end_date::DATE) AND
         employeemanage.is_deleted = false AND
-        employee.organization_id = in_org_id AND
+        employee.organization_id = 1 AND
         (employeelog.event_at - INTERVAL '7 hours')::DATE >= in_start_date::DATE AND 
         (employeelog.event_at - INTERVAL '7 hours')::DATE <= in_end_date::DATE	
 	),
@@ -92,13 +90,13 @@ BEGIN
 			WHEN CASE 
 					WHEN a.begin_schedule_time >= TO_CHAR(CASE 
 								WHEN entertime.event_at IS NULL
-									THEN LAG(exittime.event_at) OVER (ORDER BY exittime.rn)
+								    THEN LAG(exittime.event_at) OVER (PARTITION BY a.employee_id, a.eventon ORDER BY exittime.rn)
 								ELSE entertime.event_at
 								END, 'HH24:MI')::interval
 						THEN a.begin_schedule_time
 					ELSE TO_CHAR(CASE 
 								WHEN entertime.event_at IS NULL
-									THEN LAG(exittime.event_at) OVER (ORDER BY exittime.rn)
+								    THEN LAG(exittime.event_at) OVER (PARTITION BY a.employee_id, a.eventon ORDER BY exittime.rn)
 								ELSE entertime.event_at
 								END, 'HH24:MI')::interval
 					END >= a.end_schedule_time
@@ -106,13 +104,13 @@ BEGIN
 			ELSE CASE 
 					WHEN a.begin_schedule_time >= TO_CHAR(CASE 
 								WHEN entertime.event_at IS NULL
-									THEN LAG(exittime.event_at) OVER (ORDER BY exittime.rn)
+									THEN LAG(exittime.event_at) OVER (PARTITION BY a.employee_id, a.eventon ORDER BY exittime.rn)
 								ELSE entertime.event_at
 								END, 'HH24:MI')::interval
 						THEN a.begin_schedule_time
 					ELSE TO_CHAR(CASE 
 								WHEN entertime.event_at IS NULL
-									THEN LAG(exittime.event_at) OVER (ORDER BY exittime.rn)
+								    THEN LAG(exittime.event_at) OVER (PARTITION BY a.employee_id, a.eventon ORDER BY exittime.rn)
 								ELSE entertime.event_at
 								END, 'HH24:MI')::interval
 					END
@@ -120,51 +118,53 @@ BEGIN
 		CASE 
 			WHEN a.end_schedule_time <= TO_CHAR(CASE 
 						WHEN exittime.event_at IS NULL
-							THEN LEAD(entertime.event_at) OVER (ORDER BY entertime.rn)
+						    THEN LEAD(entertime.event_at) OVER (PARTITION BY a.employee_id, a.eventon ORDER BY entertime.rn)
 						ELSE exittime.event_at
 						END, 'HH24:MI')::interval
 				OR TO_CHAR(CASE 
 						WHEN exittime.event_at IS NULL
-							THEN LEAD(entertime.event_at) OVER (ORDER BY entertime.rn)
+							THEN LEAD(entertime.event_at) OVER (PARTITION BY a.employee_id, a.eventon ORDER BY entertime.rn)
 						ELSE exittime.event_at
 						END, 'HH24:MI')::interval <= '07:00'::interval
 				THEN a.end_schedule_time
 			ELSE TO_CHAR(CASE 
 						WHEN exittime.event_at IS NULL
-							THEN LEAD(entertime.event_at) OVER (ORDER BY entertime.rn)
+							THEN LEAD(entertime.event_at) OVER (PARTITION BY a.employee_id, a.eventon ORDER BY entertime.rn)
 						ELSE exittime.event_at
 						END, 'HH24:MI')::interval
 			END AS exitschedule,
 		CASE 
 			WHEN entertime.event_at IS NULL
-				THEN LAG(exittime.event_at) OVER (ORDER BY exittime.rn)
+				THEN LAG(exittime.event_at) OVER (PARTITION BY a.employee_id, a.eventon ORDER BY exittime.rn)
 			ELSE entertime.event_at
 			END AS entertime,
 		CASE 
 			WHEN exittime.event_at IS NULL
-               THEN LEAD(entertime.event_at) OVER (ORDER BY entertime.rn)
+               THEN LEAD(entertime.event_at) OVER (PARTITION BY a.employee_id, a.eventon ORDER BY entertime.rn)
 			ELSE exittime.event_at
 			END AS exittime
 		FROM cte a 
 		LEFT JOIN (
 			SELECT cte.employee_id,
 			       event_at,
+			       eventon,
 			       rn 
 		    FROM cte 
 		    WHERE action_type = 1
 		    ) AS entertime
-		    ON a.employee_id = entertime.employee_id AND a.rn = entertime.rn 
+		    ON a.employee_id = entertime.employee_id AND a.rn = entertime.rn AND a.eventon = entertime.eventon
 	    LEFT JOIN (
 			SELECT cte.employee_id,
 			       event_at,
+			       eventon,
 			       rn 
 			FROM cte 
 			WHERE action_type = 2
 		    ) AS exittime
-		    ON a.employee_id = exittime.employee_id AND a.rn = exittime.rn - 1 
+		    ON a.employee_id = exittime.employee_id AND a.rn = exittime.rn - 1 AND a.eventon = exittime.eventon
 		ORDER BY CASE 
 			WHEN entertime.event_at IS NULL
-				THEN LAG(exittime.event_at) OVER (ORDER BY exittime.rn)
+		        THEN LAG(exittime.event_at) OVER (PARTITION BY a.employee_id, a.eventon ORDER BY exittime.rn)
 			ELSE entertime.event_at
 			END
 	),
@@ -172,6 +172,7 @@ BEGIN
       AS (
         SELECT 
 	        cte2.employee_id,
+		    cte2.eventon,
             MIN(entertime) AS first_entertime,
             MAX(exittime) AS last_exittime,
             MIN(enterschedule) AS first_enterschedule,
@@ -184,7 +185,7 @@ BEGIN
             (entertime IS NOT NULL AND exittime IS NOT NULL) AND 
 	        (entertime <> exittime)
 	    GROUP BY 
-            cte2.employee_id
+            cte2.employee_id, cte2.eventon
        ),
     cte4
       AS (
@@ -205,12 +206,11 @@ BEGIN
         FROM
            cte2
         JOIN 
-           cte3 ON cte2.employee_id = cte3.employee_id
+           cte3 ON cte2.employee_id = cte3.employee_id AND cte2.eventon = cte3.eventon
         WHERE 
            (cte2.entertime IS NOT NULL AND cte2.exittime IS NOT NULL) AND 
            (cte2.entertime <> cte2.exittime)
       )
-
     SELECT
         cte4.employee_id,
         cte4.employee_name,
