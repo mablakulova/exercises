@@ -4,7 +4,7 @@ CREATE OR REPLACE FUNCTION hrm.get_employee_turnstile_report_test1(
 	in_start_date timestamp without time zone,
 	in_end_date timestamp without time zone,
 	in_org_id integer,
-	in_language_id integer,
+	in_language_id integer, -- translate da ishlatish kerak
 	in_start_work_time interval,
 	in_end_work_time interval,
 	in_employee_fullname character varying
@@ -72,7 +72,7 @@ BEGIN
         employeemanage.start_on < in_end_date::DATE AND
 	    (employeemanage.end_on IS NULL OR employeemanage.end_on > in_end_date::DATE) AND
         employeemanage.is_deleted = false AND
-        employee.organization_id = 1 AND
+        employee.organization_id = in_org_id AND
         (employeelog.event_at - INTERVAL '7 hours')::DATE >= in_start_date::DATE AND 
         (employeelog.event_at - INTERVAL '7 hours')::DATE <= in_end_date::DATE	
 	),
