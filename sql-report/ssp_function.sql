@@ -4,7 +4,7 @@ CREATE OR REPLACE FUNCTION hrm.get_employee_turnstile_report_test1(
 	in_start_date timestamp without time zone,
 	in_end_date timestamp without time zone,
 	in_org_id integer,
-	in_language_id integer, -- translate da ishlatish kerak
+	in_language_id integer,
 	in_start_work_time interval,
 	in_end_work_time interval,
 	in_employee_fullname character varying
@@ -70,7 +70,8 @@ BEGIN
         hrm.info_work_schedule_day_hour scheduledayhour ON scheduledayhour.owner_id = schedule.id AND
         scheduledayhour.day_number = EXTRACT(ISODOW FROM (employeelog.event_at - INTERVAL '7 hours')::DATE::TIMESTAMP)
     LEFT JOIN 
-        public.info_position_translate positiontranslate ON positiontranslate.owner_id = position.id 
+	    public.info_position_translate positiontranslate ON (in_language_id IS NOT NULL AND positiontranslate.language_id = in_language_id 
+		    AND positiontranslate.column_name = 'short_name' AND positiontranslate.owner_id = position.id)
     WHERE 
         (in_employee_fullname IS NULL OR person.full_name ILIKE ('%' || in_employee_fullname || '%')) AND 
         employeemanage.start_on < in_end_date::DATE AND
@@ -329,13 +330,17 @@ BEGIN
    AS (
 	SELECT 
         DISTINCT employeemanage.employee_id,
-		(employeelog.event_At - INTERVAL '7 hours')::DATE AS eventon,
+		(employeelog.event_at - INTERVAL '7 hours')::DATE AS eventon,
 		employeelog.employee_turnstile_log_type_id AS action_type,
 		TRIM(BOTH ' ' FROM TO_CHAR((employeelog.event_At - INTERVAL '7 hours')::DATE, 'Day')) AS week_day,
 		DATE_TRUNC('minute', employeelog.event_at) AS event_at,
+	    TO_CHAR(DATE_TRUNC('minute', employeelog.event_at), 'HH24:MI')::INTERVAL AS event_at_interval,
+	    scheduledayhour.begin_at::INTERVAL AS schedule_day_begin_hour,
+	    scheduledayhour.end_at::INTERVAL AS schedule_day_end_hour,
 		COALESCE(in_start_work_time, scheduledayhour.begin_at::interval, '09:00'::interval) AS begin_schedule_time,
 		COALESCE(in_end_work_time, scheduledayhour.end_at::interval, '18:00'::interval) AS end_schedule_time,
-	    ROW_NUMBER() OVER (PARTITION BY employeelog.employee_id, (employeelog.event_At - INTERVAL '7 hours')::DATE ORDER BY employeelog.event_at) AS rn
+	    ROW_NUMBER() OVER (PARTITION BY employeelog.employee_id, (employeelog.event_At - INTERVAL '7 hours')::DATE ORDER BY employeelog.event_at) AS rn,
+	    COUNT(*) OVER () AS row_count
     FROM 
         hrm.sys_employee_turnstile_log employeelog 
     LEFT JOIN 
@@ -358,7 +363,7 @@ BEGIN
         (employeelog.event_at - INTERVAL '7 hours')::DATE >= in_start_date::DATE AND 
         (employeelog.event_at - INTERVAL '7 hours')::DATE <= in_end_date::DATE	
 	),
-    cte2
+   cte2
     AS (
 	  SELECT 
         a.employee_id,
@@ -395,32 +400,65 @@ BEGIN
 			END AS enterschedule,
 		CASE 
 			WHEN a.end_schedule_time <= TO_CHAR(CASE 
-						WHEN exittime.event_at IS NULL
-						    THEN LEAD(entertime.event_at) OVER (PARTITION BY a.employee_id, a.eventon ORDER BY entertime.rn)
-						ELSE exittime.event_at
-						END, 'HH24:MI')::interval
+						                           WHEN exittime.event_at IS NULL
+						                              THEN LEAD(entertime.event_at) OVER (PARTITION BY a.employee_id, a.eventon ORDER BY entertime.rn)
+						                        ELSE exittime.event_at
+						                        END, 'HH24:MI')::interval
 				OR TO_CHAR(CASE 
-						WHEN exittime.event_at IS NULL
-							THEN LEAD(entertime.event_at) OVER (PARTITION BY a.employee_id, a.eventon ORDER BY entertime.rn)
-						ELSE exittime.event_at
-						END, 'HH24:MI')::interval <= '07:00'::interval
+						      WHEN exittime.event_at IS NULL
+							     THEN LEAD(entertime.event_at) OVER (PARTITION BY a.employee_id, a.eventon ORDER BY entertime.rn)
+						   ELSE exittime.event_at
+						   END, 'HH24:MI')::interval <= '07:00'::interval
 				THEN a.end_schedule_time
+		    WHEN (a.row_count = 1 AND a.eventon < CURRENT_DATE AND a.action_type = 1) THEN
+		       CASE
+		           WHEN event_at_interval < a.schedule_day_end_hour 
+		              THEN a.schedule_day_end_hour
+                   WHEN event_at_interval > a.schedule_day_end_hour AND event_at_interval < '18:00'::INTERVAL 
+		              THEN '18:00'::INTERVAL
+               ELSE event_at_interval
+               END
+		    WHEN (a.row_count = 1 AND a.eventon = CURRENT_DATE AND a.action_type = 1) 
+		       THEN TO_CHAR(NOW(), 'HH24:MI')::INTERVAL
 			ELSE TO_CHAR(CASE 
 						WHEN exittime.event_at IS NULL
 							THEN LEAD(entertime.event_at) OVER (PARTITION BY a.employee_id, a.eventon ORDER BY entertime.rn)
 						ELSE exittime.event_at
 						END, 'HH24:MI')::interval
-			END AS exitschedule,
+	        END AS exitschedule,
 		CASE 
 			WHEN entertime.event_at IS NULL
 				THEN LAG(exittime.event_at) OVER (PARTITION BY a.employee_id, a.eventon ORDER BY exittime.rn)
 			ELSE entertime.event_at
 			END AS entertime,
 		CASE 
-			WHEN exittime.event_at IS NULL
+		    WHEN (a.row_count = 1 AND a.eventon < CURRENT_DATE AND a.action_type = 1) THEN
+		       CASE
+		           WHEN event_at_interval < a.schedule_day_end_hour 
+		              THEN (a.event_at::DATE || ' ' || a.schedule_day_end_hour)::TIMESTAMP
+                   WHEN event_at_interval > a.schedule_day_end_hour AND event_at_interval < '18:00'::INTERVAL 
+		              THEN (a.event_at::DATE || ' ' || '18:00'::INTERVAL)::TIMESTAMP
+               ELSE a.event_at
+               END
+		    WHEN (a.row_count = 1 AND a.eventon = CURRENT_DATE AND a.action_type = 1) 
+		       THEN NOW()
+		    WHEN exittime.event_at IS NULL
                THEN LEAD(entertime.event_at) OVER (PARTITION BY a.employee_id, a.eventon ORDER BY entertime.rn)
 			ELSE exittime.event_at
-			END AS exittime
+			END AS exittime,
+		CASE 
+		    WHEN (a.row_count = 1 AND a.eventon < CURRENT_DATE AND a.action_type = 1) THEN
+		       CASE
+		           WHEN event_at_interval < a.schedule_day_end_hour 
+		              THEN (a.event_at::DATE || ' ' || a.schedule_day_end_hour)::TIMESTAMP
+                   WHEN event_at_interval > a.schedule_day_end_hour AND event_at_interval < '18:00'::INTERVAL 
+		              THEN (a.event_at::DATE || ' ' || '18:00'::INTERVAL)::TIMESTAMP
+               ELSE a.event_at
+               END
+		    WHEN exittime.event_at IS NULL
+               THEN LEAD(entertime.event_at) OVER (PARTITION BY a.employee_id, a.eventon ORDER BY entertime.rn)
+			ELSE exittime.event_at
+			END AS d_exittime
 		FROM cte a 
 		LEFT JOIN (
 			SELECT cte.employee_id,
@@ -453,7 +491,7 @@ BEGIN
 		    cte2.eventon,
 		    cte2.week_day,
 		    TO_CHAR(cte2.entertime, 'HH24:MI:SS') AS enter_at,
-		    TO_CHAR(cte2.exittime, 'HH24:MI:SS') AS exit_at,
+		    TO_CHAR(cte2.d_exittime, 'HH24:MI:SS') AS exit_at,
             CAST((DATE_PART('day', cte2.exittime - cte2.entertime) * 24 + DATE_PART('hour', cte2.exittime - cte2.entertime) * 60 + 
              DATE_PART('minute', cte2.exittime - cte2.entertime)) AS INTEGER) period_minute,
 		    TO_CHAR(cte2.enterschedule, 'HH24:MI:SS') AS enter_at_schedule,
