@@ -306,7 +306,7 @@ BEGIN
         hrm.info_work_schedule_day_hour scheduledayhour ON scheduledayhour.owner_id = schedule.id AND
         scheduledayhour.day_number = EXTRACT(ISODOW FROM (employeelog.event_at - INTERVAL '7 hours')::DATE::TIMESTAMP)
     WHERE
-	    employeelog.employee_id = in_employee_id
+	    employeelog.employee_id = in_employee_id AND
         employeemanage.start_on < in_end_date::DATE AND
 	    (employeemanage.end_on IS NULL OR employeemanage.end_on > in_end_date::DATE) AND
         employeemanage.is_deleted = false AND
@@ -318,7 +318,6 @@ BEGIN
     AS (
 	  SELECT 
         a.employee_id,
-		a.starton,
 		a.eventon,
 		a.week_day,
 		CASE 
@@ -406,62 +405,24 @@ BEGIN
     cte3
       AS (
         SELECT 
-	        cte2.employee_id,
+            cte2.employee_id,
 		    cte2.eventon,
-            MIN(entertime) AS first_entertime,
-            MAX(exittime) AS last_exittime,
-            MIN(enterschedule) AS first_enterschedule,
-            MAX(exitschedule) AS last_exitschedule
-        FROM 
-            cte2
-        WHERE 
-            (entertime IS NOT NULL AND exittime IS NOT NULL) AND 
-	        (entertime <> exittime)
-	    GROUP BY 
-            cte2.employee_id, cte2.eventon
-       ),
-    cte4
-      AS (
-        SELECT 
-            cte2.*,
-	        cte3.first_entertime,
-	        cte3.last_exittime,
-	        cte3.first_enterschedule, 
-	        cte3.last_exitschedule,
-            (DATE_PART('day', cte2.exittime - cte2.entertime) * 24 + DATE_PART('hour', cte2.exittime - cte2.entertime) * 60 + 
-             DATE_PART('minute', cte2.exittime - cte2.entertime)) AS periodMinute,
-            (DATE_PART('day', cte2.exitschedule - cte2.enterschedule) * 24 + DATE_PART('hour', cte2.exitschedule - cte2.enterschedule) * 60 + 
-             DATE_PART('minute', cte2.exitschedule - cte2.enterschedule)) AS periodMinuteSchedule
+		    cte2.week_day,
+		    TO_CHAR(cte2.entertime, 'HH24:MI:SS') AS enter_at,
+		    TO_CHAR(cte2.exittime, 'HH24:MI:SS') AS exit_at,
+            CAST((DATE_PART('day', cte2.exittime - cte2.entertime) * 24 + DATE_PART('hour', cte2.exittime - cte2.entertime) * 60 + 
+             DATE_PART('minute', cte2.exittime - cte2.entertime)) AS INTEGER) period_minute,
+		    TO_CHAR(cte2.enterschedule, 'HH24:MI:SS') AS enter_at_schedule,
+            TO_CHAR(cte2.exitschedule, 'HH24:MI:SS') AS exit_at_schedule,
+            CAST((DATE_PART('day', cte2.exitschedule - cte2.enterschedule) * 24 + DATE_PART('hour', cte2.exitschedule - cte2.enterschedule) * 60 + 
+             DATE_PART('minute', cte2.exitschedule - cte2.enterschedule)) AS INTEGER)  period_minute_schedule
         FROM
            cte2
-        JOIN 
-           cte3 ON cte2.employee_id = cte3.employee_id AND cte2.eventon = cte3.eventon
         WHERE 
            (cte2.entertime IS NOT NULL AND cte2.exittime IS NOT NULL) AND 
            (cte2.entertime <> cte2.exittime)
       )
-    SELECT
-        cte4.employee_id,
-        TO_CHAR(cte4.eventon, 'DD.MM.YYYY') AS event_on,
-        cte4.week_day,
-        TO_CHAR(cte4.first_entertime, 'HH24:MI:SS') AS enter_at,
-        TO_CHAR(cte4.last_exittime, 'HH24:MI:SS') AS exit_at,
-		CAST(SUM(cte4.periodMinute) AS INTEGER) AS period_minute,
-        TO_CHAR(cte4.first_enterschedule, 'HH24:MI:SS') AS enter_at_schedule,
-        TO_CHAR(cte4.last_exitschedule, 'HH24:MI:SS') AS exit_at_schedule,
-        CAST(SUM(cte4.periodMinuteSchedule) AS INTEGER) AS period_minute_schedule
-    FROM
-        cte4
-    GROUP BY
-        cte4.employee_id,
-        cte4.eventon,
-	    cte4.first_entertime,
-	    cte4.last_exittime,
-	    cte4.first_enterschedule,
-	    cte4.last_exitschedule,
-        cte4.week_day
-    ORDER BY
-        cte4.eventon;
+    SELECT * FROM cte3;
 
 END;
 $BODY$;
