@@ -4,44 +4,68 @@ WITH cte
         DISTINCT employeemanage.employee_id,
 		person.full_name AS employee_name,
 		position.id position_id,
-		COALESCE(positiontranslate.translate_text::CHARACTER VARYING, position.short_name) AS positon_name,
+		COALESCE(positiontranslate.translate_text::CHARACTER VARYING, position.short_name) AS position_name,
 		TO_CHAR(employeemanage.start_on, 'DD.MM.YYYY') AS starton,
 		(employeelog.event_at - INTERVAL '7 hours')::DATE AS eventon,
 		employeelog.employee_turnstile_log_type_id AS action_type,
 		TRIM(BOTH ' ' FROM TO_CHAR((employeelog.event_At - INTERVAL '7 hours')::DATE, 'Day')) AS week_day,
 		DATE_TRUNC('minute', employeelog.event_at) AS event_at,
 	    TO_CHAR(DATE_TRUNC('minute', employeelog.event_at), 'HH24:MI')::INTERVAL AS event_at_interval,
-	    scheduledayhour.begin_at::INTERVAL AS schedule_day_begin_hour,
-	    scheduledayhour.end_at::INTERVAL AS schedule_day_end_hour,
-		COALESCE(in_start_work_time, scheduledayhour.begin_at::interval, '09:00'::interval) AS begin_schedule_time,
-		COALESCE(in_end_work_time, scheduledayhour.end_at::interval, '18:00'::interval) AS end_schedule_time,
-	    ROW_NUMBER() OVER (PARTITION BY employeelog.employee_id, (employeelog.event_At - INTERVAL '7 hours')::DATE ORDER BY employeelog.event_at) AS rn,
-	    COUNT(*) OVER () AS row_count
+        CASE
+	       WHEN employeelog.event_at IS NOT NULL
+	          THEN scheduledayhour.begin_at::INTERVAL
+	       ELSE NULL
+        END schedule_day_begin_hour,
+        CASE
+	       WHEN employeelog.event_at IS NOT NULL
+              THEN scheduledayhour.end_at::INTERVAL 
+	       ELSE NULL
+	    END schedule_day_end_hour,
+        CASE
+	       WHEN employeelog.event_at IS NOT NULL
+	          THEN COALESCE(in_start_work_time, scheduledayhour.begin_at::interval, '09:00'::interval) 
+	       ELSE NULL
+        END begin_schedule_time,
+        CASE
+	       WHEN employeelog.event_at IS NOT NULL
+	          THEN COALESCE(in_end_work_time, scheduledayhour.end_at::interval, '18:00'::interval)
+	       ELSE NULL
+        END end_schedule_time,
+        CASE
+	       WHEN employeelog.event_at IS NOT NULL
+              THEN ROW_NUMBER() OVER (PARTITION BY employeemanage.employee_id, (employeelog.event_At - INTERVAL '7 hours')::DATE 
+							    ORDER BY employeelog.event_at)
+	          ELSE NULL
+        END rn,
+        CASE 
+           WHEN employeelog.event_on IS NOT NULL
+	          THEN COUNT(*) OVER () 
+	       ELSE NULL
+        END row_count
     FROM 
-        hrm.sys_employee_turnstile_log employeelog 
+        hrm.sys_employee_manage employeemanage 
     LEFT JOIN 
-        hrm.sys_employee_manage employeemanage ON employeelog.employee_id = employeemanage.employee_id 
+        hrm.sys_employee_turnstile_log employeelog ON employeelog.employee_id = employeemanage.employee_id AND
+	    (employeelog.event_on >= in_start_date::DATE AND employeelog.event_on <= in_end_date::DATE)
     LEFT JOIN 
         hrm.hl_employee employee ON employeemanage.employee_id = employee.id 
     LEFT JOIN 
         public.hl_person person ON employee.person_id = person.id
     LEFT JOIN 
         public.info_position position ON employeemanage.position_id = position.id 
+	LEFT JOIN 
+        public.info_position_translate positiontranslate ON positiontranslate.owner_id = position.id 
     LEFT JOIN 
         hrm.info_work_schedule schedule ON schedule.id = employeemanage.work_schedule_id 
     LEFT JOIN 
-        hrm.info_work_schedule_day_hour scheduledayhour ON scheduledayhour.owner_id = schedule.id AND
-        scheduledayhour.day_number = EXTRACT(ISODOW FROM (employeelog.event_at - INTERVAL '7 hours')::DATE::TIMESTAMP)
-    LEFT JOIN 
-        public.info_position_translate positiontranslate ON positiontranslate.owner_id = position.id 
+        hrm.info_work_schedule_day_hour scheduledayhour ON (employeelog.event_on IS NULL OR scheduledayhour.owner_id = schedule.id AND
+        scheduledayhour.day_number = EXTRACT(ISODOW FROM (employeelog.event_at - INTERVAL '7 hours')::DATE::TIMESTAMP))
     WHERE 
         (in_employee_fullname IS NULL OR person.full_name ILIKE ('%' || in_employee_fullname || '%')) AND 
         employeemanage.start_on < in_end_date::DATE AND
 	    (employeemanage.end_on IS NULL OR employeemanage.end_on > in_end_date::DATE) AND
         employeemanage.is_deleted = false AND
-        employee.organization_id = 1 AND
-        (employeelog.event_at - INTERVAL '7 hours')::DATE >= in_start_date::DATE AND 
-        (employeelog.event_at - INTERVAL '7 hours')::DATE <= in_end_date::DATE	
+        employee.organization_id = in_org_id
 	),
    cte2
     AS (
@@ -49,7 +73,7 @@ WITH cte
         a.employee_id,
 		a.employee_name,
 		a.position_id,
-		a.positon_name,
+		a.position_name,
 		a.starton,
 		a.eventon,
 		a.week_day,
@@ -183,8 +207,8 @@ WITH cte
         FROM 
             cte2
         WHERE 
-            (entertime IS NOT NULL AND exittime IS NOT NULL) AND 
-	        (entertime <> exittime)
+		    (cte2.eventon IS NULL OR (cte2.entertime IS NOT NULL AND cte2.exittime IS NOT NULL)) AND 
+		    (cte2.eventon IS NULL OR (cte2.entertime <> cte2.exittime))
 	    GROUP BY 
             cte2.employee_id, cte2.eventon
        ),
@@ -208,16 +232,16 @@ WITH cte
         FROM
            cte2
         JOIN 
-           cte3 ON cte2.employee_id = cte3.employee_id AND cte2.eventon = cte3.eventon
+           cte3 ON cte2.employee_id = cte3.employee_id AND (cte2.eventon IS NULL OR (cte2.eventon = cte3.eventon))
         WHERE 
-           (cte2.entertime IS NOT NULL AND cte2.exittime IS NOT NULL) AND 
-           (cte2.entertime <> cte2.exittime)
+           (cte2.eventon IS NULL OR (cte2.entertime IS NOT NULL AND cte2.exittime IS NOT NULL)) AND 
+		   (cte2.eventon IS NULL OR (cte2.entertime <> cte2.exittime))
       )
     SELECT
         cte4.employee_id,
         cte4.employee_name,
         cte4.position_id,
-        cte4.positon_name,
+        cte4.position_name,
         cte4.starton AS start_on,
         TO_CHAR(cte4.eventon, 'DD.MM.YYYY') AS event_on,
         cte4.week_day,
@@ -240,7 +264,7 @@ WITH cte
         cte4.employee_id,
         cte4.employee_name,
         cte4.position_id,
-        cte4.positon_name,
+        cte4.position_name,
         cte4.starton,
         cte4.eventon,
 	    cte4.first_entertime,
