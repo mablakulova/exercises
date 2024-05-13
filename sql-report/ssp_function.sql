@@ -1,6 +1,5 @@
---DROP FUNCTION IF EXISTS hrm.get_employee_turnstile_report(timestamp without time zone, timestamp without time zone, integer, integer, INTERVAL, INTERVAL, character varying);
-
-CREATE OR REPLACE FUNCTION hrm.get_employee_turnstile_report_test2(
+CREATE OR REPLACE FUNCTION hrm.get_employee_turnstile_report_test2
+(
 	in_start_date timestamp without time zone,
 	in_end_date timestamp without time zone,
 	in_org_id integer,
@@ -12,7 +11,9 @@ CREATE OR REPLACE FUNCTION hrm.get_employee_turnstile_report_test2(
 	in_office_out_time INTERVAL,
 	in_calc_night_hour INTERVAL
 )
-RETURNS TABLE (
+
+RETURNS TABLE 
+(
     employee_id integer, 
     employee_name character varying, 
     position_id integer, 
@@ -29,7 +30,8 @@ RETURNS TABLE (
     period_minute_total integer, 
     enter_count bigint,
     exit_count bigint
-) 
+)
+
 LANGUAGE 'plpgsql'
 COST 100
 VOLATILE PARALLEL UNSAFE
@@ -48,7 +50,7 @@ BEGIN
 		TO_CHAR(employeemanage.start_on, 'DD.MM.YYYY') AS starton,
 		(employeelog.event_at - in_calc_night_hour)::DATE AS eventon,
 		employeelog.employee_turnstile_log_type_id AS action_type,
-		TRIM(BOTH ' ' FROM TO_CHAR((employeelog.event_At - in_calc_night_hour)::DATE, 'Day')) AS week_day,
+		TRIM(BOTH ' ' FROM TO_CHAR((employeelog.event_at - in_calc_night_hour)::DATE, 'Day')) AS week_day,
 		DATE_TRUNC('minute', employeelog.event_at) AS event_at,
 		TO_CHAR(DATE_TRUNC('minute', employeelog.event_at), 'HH24:MI')::INTERVAL AS event_at_interval,
 		CASE
@@ -73,12 +75,12 @@ BEGIN
         END end_schedule_time,
         CASE
 	       WHEN employeelog.event_at IS NOT NULL
-              THEN ROW_NUMBER() OVER (PARTITION BY employeelog.employee_id, (employeelog.event_At - in_calc_night_hour)::DATE 
+              THEN ROW_NUMBER() OVER (PARTITION BY employeelog.employee_id, (employeelog.event_at - in_calc_night_hour)::DATE 
 			    ORDER BY employeelog.event_at)
 	          ELSE NULL
         END rn,
         CASE 
-           WHEN employeelog.event_on IS NOT NULL
+           WHEN employeelog.event_at IS NOT NULL
 	          THEN COUNT(*) OVER () 
 	       ELSE NULL
         END row_count
@@ -86,7 +88,8 @@ BEGIN
         hrm.sys_employee_manage employeemanage 
     LEFT JOIN 
         hrm.sys_employee_turnstile_log employeelog ON employeelog.employee_id = employeemanage.employee_id AND
-	    (employeelog.event_on >= in_start_date::DATE AND employeelog.event_on <= in_end_date::DATE)
+	    ((employeelog.event_at - in_calc_night_hour)::DATE >= in_start_date::DATE AND 
+		 (employeelog.event_at - in_calc_night_hour)::DATE <= in_end_date::DATE)
     LEFT JOIN 
         hrm.hl_employee employee ON employeemanage.employee_id = employee.id 
     LEFT JOIN 
@@ -99,7 +102,7 @@ BEGIN
     LEFT JOIN 
         hrm.info_work_schedule schedule ON schedule.id = employeemanage.work_schedule_id 
     LEFT JOIN 
-        hrm.info_work_schedule_day_hour scheduledayhour ON (employeelog.event_on IS NULL OR scheduledayhour.owner_id = schedule.id AND
+        hrm.info_work_schedule_day_hour scheduledayhour ON (employeelog.event_at IS NULL OR scheduledayhour.owner_id = schedule.id AND
         scheduledayhour.day_number = EXTRACT(ISODOW FROM (employeelog.event_at - in_calc_night_hour)::DATE::TIMESTAMP))
     WHERE 
         (in_employee_fullname IS NULL OR person.full_name ILIKE ('%' || in_employee_fullname || '%')) AND 
@@ -323,8 +326,6 @@ BEGIN
 END;
 $BODY$;
 
---DROP FUNCTION IF EXISTS hrm.get_employee_turnstile_report_by_id(timestamp without time zone, integer, integer, integer);
-
 CREATE OR REPLACE FUNCTION hrm.get_employee_turnstile_report_by_id_test2
 (
 	in_start_date timestamp without time zone,
@@ -338,6 +339,7 @@ CREATE OR REPLACE FUNCTION hrm.get_employee_turnstile_report_by_id_test2
 	in_office_out_time INTERVAL,
 	in_calc_night_hour INTERVAL
 )
+
 RETURNS TABLE (
     employee_id integer, 
     event_on date, 
@@ -349,6 +351,7 @@ RETURNS TABLE (
     exit_at_schedule text, 
     period_minute_schedule integer
 ) 
+
 LANGUAGE 'plpgsql'
 COST 100
 VOLATILE PARALLEL UNSAFE
@@ -363,14 +366,14 @@ BEGIN
         DISTINCT employeemanage.employee_id,
 		(employeelog.event_at - in_calc_night_hour)::DATE AS eventon,
 		employeelog.employee_turnstile_log_type_id AS action_type,
-		TRIM(BOTH ' ' FROM TO_CHAR((employeelog.event_At - in_calc_night_hour)::DATE, 'Day')) AS week_day,
+		TRIM(BOTH ' ' FROM TO_CHAR((employeelog.event_at - in_calc_night_hour)::DATE, 'Day')) AS week_day,
 		DATE_TRUNC('minute', employeelog.event_at) AS event_at,
-	    TO_CHAR(DATE_TRUNC('minute', employeelog.event_at), 'HH24:MI')::INTERVAL AS event_at_INTERVAL,
+	    TO_CHAR(DATE_TRUNC('minute', employeelog.event_at), 'HH24:MI')::INTERVAL AS event_at_interval,
 	    scheduledayhour.begin_at::INTERVAL AS schedule_day_begin_hour,
 	    scheduledayhour.end_at::INTERVAL AS schedule_day_end_hour,
 		COALESCE(in_start_work_time, scheduledayhour.begin_at::INTERVAL, in_office_in_time) AS begin_schedule_time,
 		COALESCE(in_end_work_time, scheduledayhour.end_at::INTERVAL, in_office_out_time) AS end_schedule_time,
-	    ROW_NUMBER() OVER (PARTITION BY employeelog.employee_id, (employeelog.event_At - in_calc_night_hour)::DATE ORDER BY employeelog.event_at) AS rn,
+	    ROW_NUMBER() OVER (PARTITION BY employeelog.employee_id, (employeelog.event_at - in_calc_night_hour)::DATE ORDER BY employeelog.event_at) AS rn,
 	    COUNT(*) OVER () AS row_count
     FROM 
         hrm.sys_employee_turnstile_log employeelog 
@@ -443,11 +446,11 @@ BEGIN
 				THEN a.end_schedule_time
 		    WHEN (a.row_count = 1 AND a.eventon < CURRENT_DATE AND a.action_type = 1) THEN
 		       CASE
-		           WHEN event_at_INTERVAL < a.schedule_day_end_hour 
+		           WHEN event_at_interval < a.schedule_day_end_hour 
 		              THEN a.schedule_day_end_hour
-                   WHEN event_at_INTERVAL > a.schedule_day_end_hour AND event_at_INTERVAL < in_office_out_time
+                   WHEN event_at_interval > a.schedule_day_end_hour AND event_at_interval < in_office_out_time
 		              THEN in_office_out_time
-               ELSE event_at_INTERVAL
+               ELSE event_at_interval
                END
 		    WHEN (a.row_count = 1 AND a.eventon = CURRENT_DATE AND a.action_type = 1) 
 		       THEN TO_CHAR(NOW(), 'HH24:MI')::INTERVAL
@@ -465,9 +468,9 @@ BEGIN
 		CASE 
 		    WHEN (a.row_count = 1 AND a.eventon < CURRENT_DATE AND a.action_type = 1) THEN
 		       CASE
-		           WHEN event_at_INTERVAL < a.schedule_day_end_hour 
+		           WHEN event_at_interval < a.schedule_day_end_hour 
 		              THEN (a.event_at::DATE || ' ' || a.schedule_day_end_hour)::TIMESTAMP
-                   WHEN event_at_INTERVAL > a.schedule_day_end_hour AND event_at_INTERVAL < in_office_out_time
+                   WHEN event_at_interval > a.schedule_day_end_hour AND event_at_interval < in_office_out_time
 		              THEN (a.event_at::DATE || ' ' || in_office_out_time)::TIMESTAMP
                ELSE a.event_at
                END
@@ -480,9 +483,9 @@ BEGIN
 		CASE 
 		    WHEN (a.row_count = 1 AND a.eventon < CURRENT_DATE AND a.action_type = 1) THEN
 		       CASE
-		           WHEN event_at_INTERVAL < a.schedule_day_end_hour 
+		           WHEN event_at_interval < a.schedule_day_end_hour 
 		              THEN (a.event_at::DATE || ' ' || a.schedule_day_end_hour)::TIMESTAMP
-                   WHEN event_at_INTERVAL > a.schedule_day_end_hour AND event_at_INTERVAL < in_office_out_time 
+                   WHEN event_at_interval > a.schedule_day_end_hour AND event_at_interval < in_office_out_time 
 		              THEN (a.event_at::DATE || ' ' || in_office_out_time)::TIMESTAMP
                ELSE a.event_at
                END

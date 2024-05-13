@@ -8,7 +8,7 @@ WITH cte
 		TO_CHAR(employeemanage.start_on, 'DD.MM.YYYY') AS starton,
 		(employeelog.event_at - '07:00'::interval)::DATE AS eventon,
 		employeelog.employee_turnstile_log_type_id AS action_type,
-		TRIM(BOTH ' ' FROM TO_CHAR((employeelog.event_At - '07:00'::interval)::DATE, 'Day')) AS week_day,
+		TRIM(BOTH ' ' FROM TO_CHAR((employeelog.event_at - '07:00'::interval)::DATE, 'Day')) AS week_day,
 		DATE_TRUNC('minute', employeelog.event_at) AS event_at,
 		TO_CHAR(DATE_TRUNC('minute', employeelog.event_at), 'HH24:MI')::INTERVAL AS event_at_interval,
 		CASE
@@ -33,12 +33,12 @@ WITH cte
         END end_schedule_time,
         CASE
 	       WHEN employeelog.event_at IS NOT NULL
-              THEN ROW_NUMBER() OVER (PARTITION BY employeelog.employee_id, (employeelog.event_At - '07:00'::interval)::DATE 
+              THEN ROW_NUMBER() OVER (PARTITION BY employeelog.employee_id, (employeelog.event_at - '07:00'::interval)::DATE 
 			    ORDER BY employeelog.event_at)
 	          ELSE NULL
         END rn,
         CASE 
-           WHEN employeelog.event_on IS NOT NULL
+           WHEN employeelog.event_at IS NOT NULL
 	          THEN COUNT(*) OVER () 
 	       ELSE NULL
         END row_count
@@ -46,7 +46,8 @@ WITH cte
         hrm.sys_employee_manage employeemanage 
     LEFT JOIN 
         hrm.sys_employee_turnstile_log employeelog ON employeelog.employee_id = employeemanage.employee_id AND
-	    (employeelog.event_on >= '2024-05-12'::DATE AND employeelog.event_on <= '2024-05-12'::DATE)
+	    ((employeelog.event_at - '07:00'::interval)::DATE  >= '2024-05-12'::DATE AND 
+		 (employeelog.event_at - '07:00'::interval)::DATE  <= '2024-05-12'::DATE)
     LEFT JOIN 
         hrm.hl_employee employee ON employeemanage.employee_id = employee.id 
     LEFT JOIN 
