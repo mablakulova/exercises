@@ -1,4 +1,9 @@
-CREATE OR REPLACE FUNCTION hrm.get_employee_turnstile_report_test2
+-- DROP OLD FUNCTIONS
+DROP FUNCTION IF EXISTS hrm.get_employee_turnstile_report(timestamp without time zone, timestamp without time zone, integer, integer, interval, interval, character varying);
+DROP FUNCTION IF EXISTS hrm.get_employee_turnstile_report_by_id(timestamp without time zone, timestamp without time zone, integer, integer, integer, interval, interval);
+
+--CREATE NEW get_employee_turnstile_report FUNCTION
+CREATE OR REPLACE FUNCTION hrm.get_employee_turnstile_report
 (
 	in_start_date timestamp without time zone,
 	in_end_date timestamp without time zone,
@@ -9,7 +14,8 @@ CREATE OR REPLACE FUNCTION hrm.get_employee_turnstile_report_test2
 	in_employee_fullname character varying,
 	in_office_in_time INTERVAL,
 	in_office_out_time INTERVAL,
-	in_calc_night_hour INTERVAL
+	in_calc_night_hour INTERVAL,
+	in_is_late BOOLEAN
 )
 
 RETURNS TABLE 
@@ -53,11 +59,6 @@ BEGIN
 		TRIM(BOTH ' ' FROM TO_CHAR((employeelog.event_at - in_calc_night_hour)::DATE, 'Day')) AS week_day,
 		DATE_TRUNC('minute', employeelog.event_at) AS event_at,
 		TO_CHAR(DATE_TRUNC('minute', employeelog.event_at), 'HH24:MI')::INTERVAL AS event_at_interval,
-		CASE
-	       WHEN employeelog.event_at IS NOT NULL
-	          THEN scheduledayhour.begin_at::INTERVAL
-	       ELSE NULL
-        END schedule_day_begin_hour,
         CASE
 	       WHEN employeelog.event_at IS NOT NULL
               THEN scheduledayhour.end_at::INTERVAL 
@@ -263,7 +264,8 @@ BEGIN
             cte2
         WHERE 
 		    (cte2.eventon IS NULL OR (cte2.entertime IS NOT NULL AND cte2.exittime IS NOT NULL)) AND 
-		    (cte2.eventon IS NULL OR (cte2.entertime <> cte2.exittime))
+		    (cte2.eventon IS NULL OR (cte2.entertime <> cte2.exittime)) AND
+			(in_is_late IS FALSE OR (in_is_late IS TRUE AND TO_CHAR(cte2.entertime, 'HH24:MI')::INTERVAL > in_start_work_time))
 	    GROUP BY 
             cte2.employee_id, cte2.eventon
        ),
@@ -290,7 +292,8 @@ BEGIN
            cte3 ON cte2.employee_id = cte3.employee_id AND (cte2.eventon IS NULL OR (cte2.eventon = cte3.eventon))
         WHERE 
            (cte2.eventon IS NULL OR (cte2.entertime IS NOT NULL AND cte2.exittime IS NOT NULL)) AND 
-		   (cte2.eventon IS NULL OR (cte2.entertime <> cte2.exittime))
+		   (cte2.eventon IS NULL OR (cte2.entertime <> cte2.exittime)) AND 
+		   (in_is_late IS FALSE OR (in_is_late IS TRUE AND TO_CHAR(cte2.entertime, 'HH24:MI')::INTERVAL > in_start_work_time))
       )
     SELECT
         cte4.employee_id,
@@ -337,7 +340,8 @@ BEGIN
 END;
 $BODY$;
 
-CREATE OR REPLACE FUNCTION hrm.get_employee_turnstile_report_by_id_test2
+--CREATE NEW get_employee_turnstile_report_by_id FUNCTION
+CREATE OR REPLACE FUNCTION hrm.get_employee_turnstile_report_by_id
 (
 	in_start_date timestamp without time zone,
 	in_end_date timestamp without time zone,
@@ -380,12 +384,11 @@ BEGIN
 		TRIM(BOTH ' ' FROM TO_CHAR((employeelog.event_at - in_calc_night_hour)::DATE, 'Day')) AS week_day,
 		DATE_TRUNC('minute', employeelog.event_at) AS event_at,
 	    TO_CHAR(DATE_TRUNC('minute', employeelog.event_at), 'HH24:MI')::INTERVAL AS event_at_interval,
-	    scheduledayhour.begin_at::INTERVAL AS schedule_day_begin_hour,
 	    scheduledayhour.end_at::INTERVAL AS schedule_day_end_hour,
 		COALESCE(in_start_work_time, scheduledayhour.begin_at::INTERVAL, in_office_in_time) AS begin_schedule_time,
 		COALESCE(in_end_work_time, scheduledayhour.end_at::INTERVAL, in_office_out_time) AS end_schedule_time,
 	    ROW_NUMBER() OVER (PARTITION BY employeelog.employee_id, (employeelog.event_at - in_calc_night_hour)::DATE ORDER BY employeelog.event_at) AS rn,
-	    COUNT(*) OVER () AS row_count
+	    COUNT(*) OVER (PARTITION BY employeelog.employee_id, (employeelog.event_at - in_calc_night_hour)::DATE)  AS row_count
     FROM 
         hrm.sys_employee_turnstile_log employeelog 
     LEFT JOIN 
