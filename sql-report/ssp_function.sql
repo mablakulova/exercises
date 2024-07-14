@@ -386,9 +386,7 @@ BEGIN
 	    TO_CHAR(DATE_TRUNC('minute', employeelog.event_at), 'HH24:MI')::INTERVAL AS event_at_interval,
 	    scheduledayhour.end_at::INTERVAL AS schedule_day_end_hour,
 		COALESCE(in_start_work_time, scheduledayhour.begin_at::INTERVAL, in_office_in_time) AS begin_schedule_time,
-		COALESCE(in_end_work_time, scheduledayhour.end_at::INTERVAL, in_office_out_time) AS end_schedule_time,
-	    ROW_NUMBER() OVER (PARTITION BY employeelog.employee_id, (employeelog.event_at - in_calc_night_hour)::DATE ORDER BY employeelog.event_at) AS rn,
-	    COUNT(*) OVER (PARTITION BY employeelog.employee_id, (employeelog.event_at - in_calc_night_hour)::DATE)  AS row_count
+		COALESCE(in_end_work_time, scheduledayhour.end_at::INTERVAL, in_office_out_time) AS end_schedule_time
     FROM 
         hrm.sys_employee_turnstile_log employeelog 
     LEFT JOIN 
@@ -409,6 +407,14 @@ BEGIN
         (employeelog.event_at - in_calc_night_hour)::DATE >= in_start_date::DATE AND 
         (employeelog.event_at - in_calc_night_hour)::DATE <= in_end_date::DATE	
 	),
+   cte1 
+   AS (
+    SELECT
+        cte.*,
+        ROW_NUMBER() OVER (PARTITION BY cte.employee_id, cte.eventon ORDER BY event_at) AS rn,
+        COUNT(*) OVER (PARTITION BY cte.employee_id, cte.eventon) AS row_count
+    FROM cte
+   ),
    cte2
     AS (
 	  SELECT 
@@ -516,22 +522,22 @@ BEGIN
                THEN LEAD(entertime.event_at) OVER (PARTITION BY a.employee_id, a.eventon ORDER BY entertime.rn)
 			ELSE exittime.event_at
 			END AS d_exittime
-		FROM cte a 
+		FROM cte1 a 
 		LEFT JOIN (
-			SELECT cte.employee_id,
+			SELECT cte1.employee_id,
 			       event_at,
 			       eventon,
 			       rn 
-		    FROM cte 
+		    FROM cte1
 		    WHERE action_type = 1
 		    ) AS entertime
 		    ON a.employee_id = entertime.employee_id AND a.rn = entertime.rn AND a.eventon = entertime.eventon
 	    LEFT JOIN (
-			SELECT cte.employee_id,
+			SELECT cte1.employee_id,
 			       event_at,
 			       eventon,
 			       rn 
-			FROM cte 
+			FROM cte1 
 			WHERE action_type = 2
 		    ) AS exittime
 		    ON a.employee_id = exittime.employee_id AND a.rn = exittime.rn - 1 AND a.eventon = exittime.eventon
@@ -549,17 +555,19 @@ BEGIN
 		    cte2.week_day,
 		    TO_CHAR(cte2.entertime, 'HH24:MI:SS') AS enter_at,
 		    TO_CHAR(cte2.d_exittime, 'HH24:MI:SS') AS exit_at,
-            CAST((DATE_PART('day', cte2.exittime - cte2.entertime) * 24 + DATE_PART('hour', cte2.exittime - cte2.entertime) * 60 + 
-             DATE_PART('minute', cte2.exittime - cte2.entertime)) AS INTEGER) period_minute,
+            COALESCE(CAST((DATE_PART('day', cte2.exittime - cte2.entertime) * 24 + DATE_PART('hour', cte2.exittime - cte2.entertime) * 60 + 
+             DATE_PART('minute', cte2.exittime - cte2.entertime)) AS INTEGER), 0) period_minute,
 		    TO_CHAR(cte2.enterschedule, 'HH24:MI:SS') AS enter_at_schedule,
             TO_CHAR(cte2.exitschedule, 'HH24:MI:SS') AS exit_at_schedule,
-            CAST((DATE_PART('day', cte2.exitschedule - cte2.enterschedule) * 24 + DATE_PART('hour', cte2.exitschedule - cte2.enterschedule) * 60 + 
-             DATE_PART('minute', cte2.exitschedule - cte2.enterschedule)) AS INTEGER)  period_minute_schedule
+            COALESCE(CAST((DATE_PART('day', cte2.exitschedule - cte2.enterschedule) * 24 + DATE_PART('hour', cte2.exitschedule - cte2.enterschedule) * 60 + 
+             DATE_PART('minute', cte2.exitschedule - cte2.enterschedule)) AS INTEGER), 0)  period_minute_schedule
         FROM
            cte2
         WHERE 
-           (cte2.entertime IS NOT NULL AND cte2.exittime IS NOT NULL) AND 
-           (cte2.entertime <> cte2.exittime)
+           --(cte2.entertime IS NOT NULL AND cte2.exittime IS NOT NULL) AND 
+           --(cte2.entertime <> cte2.exittime)
+		   cte2.entertime IS NOT NULL AND 
+           (cte2.exittime IS NULL OR cte2.entertime <> cte2.exittime)
       )
     SELECT * FROM cte3;
 
